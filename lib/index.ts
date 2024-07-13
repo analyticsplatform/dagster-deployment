@@ -56,6 +56,19 @@ export class DagsterDeployment extends Construct {
       removalPolicy: cdk.RemovalPolicy.RETAIN,
     });
 
+    const computeLogsBucket = new s3.Bucket(scope, 'ComputeLogsBucket', {
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      encryption: s3.BucketEncryption.S3_MANAGED,
+      enforceSSL: true,
+      versioned: true,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
+
+    computeLogsBucket.addLifecycleRule({
+      expiration: cdk.Duration.days(365),
+      noncurrentVersionExpiration: cdk.Duration.days(365),
+      id: 'ExpireObjectsAfter365Days',
+    })
 
     this.databaseSecurityGroup = new ec2.SecurityGroup(this, 'DatabaseSecurityGroup', {
       vpc: props.network.vpc,
