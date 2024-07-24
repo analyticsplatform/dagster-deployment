@@ -99,6 +99,10 @@ export class DagsterDeployment extends Construct {
       description: 'IAM role for Dagster ECS task',
     });
 
+    computeLogsBucket.grantReadWrite(dagsterEcsTaskRole)
+    rawDataBucket.grantReadWrite(dagsterEcsTaskRole)
+    cleanDataBucket.grantReadWrite(dagsterEcsTaskRole)
+
     // Define a shared volume
     const sharedVolume = {
       name: 'appdir',
@@ -139,6 +143,7 @@ export class DagsterDeployment extends Construct {
       environment: {
         RAW_DATA_BUCKET: rawDataBucket.bucketName,
         CLEAN_DATA_BUCKET: cleanDataBucket.bucketName,
+        COMPUTE_LOGS_BUCKET: computeLogsBucket.bucketName,
       },
       secrets: {
         DAGSTER_PG_USERNAME: ecs.Secret.fromSecretsManager(database.secret!, 'username'),
@@ -159,13 +164,25 @@ export class DagsterDeployment extends Construct {
     daemonContainer.addContainerDependencies({
       container: syncContainer,
       // TODO: Add healthCheck in sync container and update this condition
-      condition: ecs.ContainerDependencyCondition.START 
+      condition: ecs.ContainerDependencyCondition.START
     })
 
     const webserverContainer = dagsterTaskDefinition.addContainer('WebserverContainer', {
       image: ecs.ContainerImage.fromEcrRepository(props.ecr.webserver),
       command: ['dagster-webserver', '--read-only'],
       essential: true,
+      environment: {
+        RAW_DATA_BUCKET: rawDataBucket.bucketName,
+        CLEAN_DATA_BUCKET: cleanDataBucket.bucketName,
+        COMPUTE_LOGS_BUCKET: computeLogsBucket.bucketName,
+      },
+      secrets: {
+        DAGSTER_PG_USERNAME: ecs.Secret.fromSecretsManager(database.secret!, 'username'),
+        DAGSTER_PG_PASSWORD: ecs.Secret.fromSecretsManager(database.secret!, 'password'),
+        DAGSTER_PG_HOST: ecs.Secret.fromSecretsManager(database.secret!, 'host'),
+        DAGSTER_PG_DB: ecs.Secret.fromSecretsManager(database.secret!, 'dbname'),
+        DAGSTER_PG_PORT: ecs.Secret.fromSecretsManager(database.secret!, 'port')
+      },
       portMappings: [{
         containerPort: 3000
       }],
@@ -180,7 +197,7 @@ export class DagsterDeployment extends Construct {
 
     webserverContainer.addContainerDependencies({
       container: daemonContainer,
-      condition: ecs.ContainerDependencyCondition.START 
+      condition: ecs.ContainerDependencyCondition.START
     })
 
     const webserverAdminContainer = dagsterTaskDefinition.addContainer('WebserverAdminContainer', {
@@ -188,7 +205,17 @@ export class DagsterDeployment extends Construct {
       command: ['/bin/sh', '-c', 'sleep 20 && dagster-webserver'],
       essential: true,
       environment: {
-        DAGSTER_WEBSERVER_PORT: '3001'
+        DAGSTER_WEBSERVER_PORT: '3001',
+        RAW_DATA_BUCKET: rawDataBucket.bucketName,
+        CLEAN_DATA_BUCKET: cleanDataBucket.bucketName,
+        COMPUTE_LOGS_BUCKET: computeLogsBucket.bucketName,
+      },
+      secrets: {
+        DAGSTER_PG_USERNAME: ecs.Secret.fromSecretsManager(database.secret!, 'username'),
+        DAGSTER_PG_PASSWORD: ecs.Secret.fromSecretsManager(database.secret!, 'password'),
+        DAGSTER_PG_HOST: ecs.Secret.fromSecretsManager(database.secret!, 'host'),
+        DAGSTER_PG_DB: ecs.Secret.fromSecretsManager(database.secret!, 'dbname'),
+        DAGSTER_PG_PORT: ecs.Secret.fromSecretsManager(database.secret!, 'port')
       },
       portMappings: [{
         containerPort: 3001
@@ -204,7 +231,7 @@ export class DagsterDeployment extends Construct {
 
     webserverAdminContainer.addContainerDependencies({
       container: webserverContainer,
-      condition: ecs.ContainerDependencyCondition.START 
+      condition: ecs.ContainerDependencyCondition.START
     })
 
     // Mount the shared volume to /app directory in containers
@@ -225,6 +252,8 @@ export class DagsterDeployment extends Construct {
       description: 'Dagster',
       allowAllOutbound: true,
     });
+
+    this.databaseSecurityGroup.addIngressRule(dagsterSecurityGroup, ec2.Port.POSTGRES)
 
     const dagsterService = new ecs.FargateService(scope, "DagsterService", {
       cluster: ecsCluster,
