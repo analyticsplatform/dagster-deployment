@@ -268,6 +268,80 @@ export class DagsterDeployment extends Construct {
       vpcSubnets: { subnetType: ec2.SubnetType.PUBLIC }
     });
 
+    // Define a shared volume for job runs
+    const jobRunSharedVolume = {
+      name: 'jobrunappdir',
+    };
+
+    // Container Task Definition for ECS Run Launcher
+    const dagsterJobRunnerTaskDefinition = new ecs.FargateTaskDefinition(scope, 'DagsterJobRunnerTaskDefinition', {
+      memoryLimitMiB: 1024,
+      cpu: 512,
+      taskRole: dagsterEcsTaskRole,
+      volumes: [jobRunSharedVolume],
+      runtimePlatform: {
+        cpuArchitecture: ecs.CpuArchitecture.X86_64,
+        operatingSystemFamily: ecs.OperatingSystemFamily.LINUX
+      }
+    });
+
+    const jobSyncContainer = dagsterJobRunnerTaskDefinition.addContainer('SyncContainer', {
+      image: ecs.ContainerImage.fromEcrRepository(props.ecr.sync),
+      essential: true,
+      memoryReservationMiB: 50,
+      environment: {
+        GIT_REPO_URL: props.gitRepoUrl
+      },
+      logging: ecs.LogDrivers.awsLogs({
+        streamPrefix: 'JobSyncContainer',
+        logGroup: new logs.LogGroup(scope, 'DagsterJobsSyncLogGroup', {
+          logGroupName: 'DagsterJobSync',
+          retention: logs.RetentionDays.ONE_WEEK,
+        }),
+      }),
+    });
+
+    const jobRunContainer = dagsterJobRunnerTaskDefinition.addContainer('run', {
+      image: ecs.ContainerImage.fromEcrRepository(props.ecr.daemon),
+      essential: true,
+      memoryReservationMiB: 100,
+      environment: {
+        RAW_DATA_BUCKET: rawDataBucket.bucketName,
+        CLEAN_DATA_BUCKET: cleanDataBucket.bucketName,
+        COMPUTE_LOGS_BUCKET: computeLogsBucket.bucketName,
+      },
+      secrets: {
+        DAGSTER_PG_USERNAME: ecs.Secret.fromSecretsManager(database.secret!, 'username'),
+        DAGSTER_PG_PASSWORD: ecs.Secret.fromSecretsManager(database.secret!, 'password'),
+        DAGSTER_PG_HOST: ecs.Secret.fromSecretsManager(database.secret!, 'host'),
+        DAGSTER_PG_DB: ecs.Secret.fromSecretsManager(database.secret!, 'dbname'),
+        DAGSTER_PG_PORT: ecs.Secret.fromSecretsManager(database.secret!, 'port')
+      },
+      logging: ecs.LogDrivers.awsLogs({
+        streamPrefix: 'Job',
+        logGroup: new logs.LogGroup(scope, 'DagsterJobsLogGroup', {
+          logGroupName: 'DagsterJobs',
+          retention: logs.RetentionDays.ONE_WEEK,
+        }),
+      })
+    });
+
+    // Mount the shared volume to /app directory in containers
+    const jobrunmountPoint = {
+      containerPath: '/app',
+      readOnly: false,
+      sourceVolume: jobRunSharedVolume.name,
+    };
+
+    jobSyncContainer.addMountPoints(jobrunmountPoint);
+    jobRunContainer.addMountPoints(jobrunmountPoint);
+
+    jobRunContainer.addContainerDependencies({
+      container: jobSyncContainer,
+      // TODO: Add healthCheck in sync container and update this condition
+      condition: ecs.ContainerDependencyCondition.START
+    })
+
     const userPool = new cognito.UserPool(this, 'DagsterPool');
     const userPoolClient = userPool.addClient('DagsterClient', {
       generateSecret: true,
