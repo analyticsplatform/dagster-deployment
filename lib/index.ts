@@ -34,7 +34,7 @@ export class DagsterDeployment extends Construct {
   constructor(scope: Construct, id: string, props: DagsterDeploymentProps) {
     super(scope, id);
 
-    const rawDataBucket = new s3.Bucket(scope, 'RawDataBucket', {
+    const bronzeDataBucket = new s3.Bucket(scope, 'BronzeDataBucket', {
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
       encryption: s3.BucketEncryption.S3_MANAGED,
       enforceSSL: true,
@@ -42,13 +42,21 @@ export class DagsterDeployment extends Construct {
       removalPolicy: cdk.RemovalPolicy.RETAIN,
     });
 
-    rawDataBucket.addLifecycleRule({
+    bronzeDataBucket.addLifecycleRule({
       expiration: cdk.Duration.days(365),
       noncurrentVersionExpiration: cdk.Duration.days(365),
       id: 'ExpireObjectsAfter365Days',
     })
 
-    const cleanDataBucket = new s3.Bucket(scope, 'CleanDataBucket', {
+    const silverDataBucket = new s3.Bucket(scope, 'SilverDataBucket', {
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      encryption: s3.BucketEncryption.S3_MANAGED,
+      enforceSSL: true,
+      versioned: true,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
+
+    const goldDataBucket = new s3.Bucket(scope, 'GoldDataBucket', {
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
       encryption: s3.BucketEncryption.S3_MANAGED,
       enforceSSL: true,
@@ -100,8 +108,9 @@ export class DagsterDeployment extends Construct {
     });
 
     computeLogsBucket.grantReadWrite(dagsterEcsTaskRole)
-    rawDataBucket.grantReadWrite(dagsterEcsTaskRole)
-    cleanDataBucket.grantReadWrite(dagsterEcsTaskRole)
+    bronzeDataBucket.grantReadWrite(dagsterEcsTaskRole)
+    silverDataBucket.grantReadWrite(dagsterEcsTaskRole)
+    goldDataBucket.grantReadWrite(dagsterEcsTaskRole)
 
     // Define a shared volume
     const sharedVolume = {
@@ -110,8 +119,8 @@ export class DagsterDeployment extends Construct {
 
     // Single container Task Definition
     const dagsterTaskDefinition = new ecs.FargateTaskDefinition(scope, 'DagsterTaskDefinition', {
-      memoryLimitMiB: 1024,
-      cpu: 512,
+      memoryLimitMiB: 2048,
+      cpu: 1024,
       taskRole: dagsterEcsTaskRole,
       volumes: [sharedVolume],
       runtimePlatform: {
@@ -139,10 +148,11 @@ export class DagsterDeployment extends Construct {
     const daemonContainer = dagsterTaskDefinition.addContainer('DaemonContainer', {
       image: ecs.ContainerImage.fromEcrRepository(props.ecr.daemon),
       essential: true,
-      memoryReservationMiB: 100,
+      memoryReservationMiB: 512,
       environment: {
-        RAW_DATA_BUCKET: rawDataBucket.bucketName,
-        CLEAN_DATA_BUCKET: cleanDataBucket.bucketName,
+        BRONZE_DATA_BUCKET: bronzeDataBucket.bucketName,
+        SILVER_DATA_BUCKET: silverDataBucket.bucketName,
+        GOLD_DATA_BUCKET: goldDataBucket.bucketName,
         COMPUTE_LOGS_BUCKET: computeLogsBucket.bucketName,
       },
       secrets: {
@@ -171,9 +181,11 @@ export class DagsterDeployment extends Construct {
       image: ecs.ContainerImage.fromEcrRepository(props.ecr.webserver),
       command: ['dagster-webserver', '--read-only'],
       essential: true,
+      memoryReservationMiB: 512,
       environment: {
-        RAW_DATA_BUCKET: rawDataBucket.bucketName,
-        CLEAN_DATA_BUCKET: cleanDataBucket.bucketName,
+        BRONZE_DATA_BUCKET: bronzeDataBucket.bucketName,
+        SILVER_DATA_BUCKET: silverDataBucket.bucketName,
+        GOLD_DATA_BUCKET: goldDataBucket.bucketName,
         COMPUTE_LOGS_BUCKET: computeLogsBucket.bucketName,
       },
       secrets: {
@@ -204,10 +216,12 @@ export class DagsterDeployment extends Construct {
       image: ecs.ContainerImage.fromEcrRepository(props.ecr.webserver),
       command: ['/bin/sh', '-c', 'sleep 20 && dagster-webserver'],
       essential: true,
+      memoryReservationMiB: 512,
       environment: {
         DAGSTER_WEBSERVER_PORT: '3001',
-        RAW_DATA_BUCKET: rawDataBucket.bucketName,
-        CLEAN_DATA_BUCKET: cleanDataBucket.bucketName,
+        BRONZE_DATA_BUCKET: bronzeDataBucket.bucketName,
+        SILVER_DATA_BUCKET: silverDataBucket.bucketName,
+        GOLD_DATA_BUCKET: goldDataBucket.bucketName,
         COMPUTE_LOGS_BUCKET: computeLogsBucket.bucketName,
       },
       secrets: {
@@ -306,8 +320,9 @@ export class DagsterDeployment extends Construct {
       essential: true,
       memoryReservationMiB: 100,
       environment: {
-        RAW_DATA_BUCKET: rawDataBucket.bucketName,
-        CLEAN_DATA_BUCKET: cleanDataBucket.bucketName,
+        BRONZE_DATA_BUCKET: bronzeDataBucket.bucketName,
+        SILVER_DATA_BUCKET: silverDataBucket.bucketName,
+        GOLD_DATA_BUCKET: goldDataBucket.bucketName,
         COMPUTE_LOGS_BUCKET: computeLogsBucket.bucketName,
       },
       secrets: {
