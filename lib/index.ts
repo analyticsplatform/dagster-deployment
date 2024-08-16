@@ -160,7 +160,8 @@ export class DagsterDeployment extends Construct {
         DAGSTER_PG_PASSWORD: ecs.Secret.fromSecretsManager(database.secret!, 'password'),
         DAGSTER_PG_HOST: ecs.Secret.fromSecretsManager(database.secret!, 'host'),
         DAGSTER_PG_DB: ecs.Secret.fromSecretsManager(database.secret!, 'dbname'),
-        DAGSTER_PG_PORT: ecs.Secret.fromSecretsManager(database.secret!, 'port')
+        DAGSTER_PG_PORT: ecs.Secret.fromSecretsManager(database.secret!, 'port'),
+        SLACKBOT: ecs.Secret.fromSecretsManager(database.secret!, 'slackbot')
       },
       logging: ecs.LogDrivers.awsLogs({
         streamPrefix: 'DaemonContainer',
